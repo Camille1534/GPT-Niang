@@ -1,4 +1,4 @@
-if(!('CompletionWindowLayer' -as [type])){
+﻿if(!('CompletionWindowLayer' -as [type])){
   Add-Type -TypeDefinition @'
 using System;using System.Runtime.InteropServices;
 public static class CompletionWindowLayer {
@@ -131,7 +131,7 @@ function Dismiss-CompletionNotification {
 }
 
 function Start-CompletionMonitor {
-  if(!$script:completionNotificationsEnabled){return}
+  if(!$script:completionNotificationsEnabled -and !$script:taskPetEnabled){return}
   if($script:completionProcess){
     if(!$script:completionProcess.HasExited){return}
     $script:completionLastError=[GptCompletionMonitorOutput]::LastError
@@ -148,7 +148,7 @@ function Start-CompletionMonitor {
     # and partial harnesses may not have a data directory yet.
     $monitorArguments='"'+(Join-Path $script:appDir 'runtime\completion-monitor.mjs')+'"'
     if($script:dataDir){$monitorArguments+=' "'+(Join-Path $script:dataDir 'completion-monitor-state.json')+'"'}
-    $start.Arguments=$monitorArguments
+    $start.Arguments=$monitorArguments+' --task-states'
     $start.WorkingDirectory=$script:appDir;$start.UseShellExecute=$false;$start.CreateNoWindow=$true
     if($script:config.codexHome){$start.EnvironmentVariables['CODEX_HOME']=[IO.Path]::GetFullPath([string]$script:config.codexHome)}
     $start.RedirectStandardInput=$true;$start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
@@ -181,16 +181,17 @@ function Set-CompletionNotificationEnabled([bool]$Enabled) {
   $script:completionNotificationsEnabled=$Enabled;$script:completionRetryAfter=0
   if($Enabled){Start-CompletionMonitor}
   else{
-    Stop-CompletionMonitor;Clear-CompletionNotifications
+    if(!$script:taskPetEnabled){Stop-CompletionMonitor};Clear-CompletionNotifications
     $script:completionLastError=$null
     if(!$script:collapsed -and $script:bubbleMode-eq 'completion'){Hide-Quota}
   }
   Reset-WidgetAutoQuoteSchedule;Save-Settings
 }
 function Receive-CompletionMonitorLine([string]$Line) {
-  if(!$script:completionNotificationsEnabled -or $Line.Length-gt 2048){return}
+  if($Line.Length-gt 2048){return}
   try{
     $event=$Line|ConvertFrom-Json
+    if($event.type-eq 'task-state'){Receive-TaskPetState $event;return};if(!$script:completionNotificationsEnabled){return}
     if($event.type-ne 'completion' -or $event.sessionId-isnot [string] -or $event.turnId-isnot [string] -or !$event.sessionId -or !$event.turnId){return}
     if($null-eq $event.endedAt -or [double]$event.endedAt-lt $script:completionAcknowledgedAt){return}
     $script:completionReceived++;$script:completionPending=$true
@@ -210,8 +211,9 @@ function Pause-CompletionNotification {
   if(!$script:collapsed -and $script:bubbleMode-eq 'completion'){Hide-Quota -KeepCompletion}
 }
 function Tick-CompletionNotifications([bool]$Visible) {
-  if(!$script:completionNotificationsEnabled){return}
+  if(!$script:completionNotificationsEnabled -and !$script:taskPetEnabled){return}
   Read-CompletionMonitorOutput;Start-CompletionMonitor
+  if(!$script:completionNotificationsEnabled){return}
   $busy=[bool]$script:drag -or $script:context.IsOpen -or $script:settingsSizePreview -or (Test-WidgetUpdateEditor)
   if($busy){Pause-CompletionNotification;return}
   if($script:completionTemporary){return}
