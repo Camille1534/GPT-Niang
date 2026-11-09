@@ -123,7 +123,11 @@ function Initialize-CompletionNotificationState($Settings=$null) {
   $script:completionReceived=0;$script:completionDisplayCount=0;$script:completionLastError=$null
   $script:completionAcknowledgedAt=0;$script:completionTemporary=$null
 }
-function Clear-CompletionNotifications {$script:completionPending=$false;[GptCompletionMonitorOutput]::Clear()}
+function Clear-CompletionNotifications {
+  $script:completionPending=$false
+  # The live pipe is shared with task reactions; clearing it detaches its producer.
+  if(!$script:taskPetEnabled){[GptCompletionMonitorOutput]::Clear()}
+}
 function Dismiss-CompletionNotification {
   Stop-TemporaryCompletion
   $script:completionAcknowledgedAt=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()

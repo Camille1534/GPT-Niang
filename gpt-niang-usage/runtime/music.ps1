@@ -58,7 +58,7 @@ function Set-WidgetMusicEnabled([bool]$Enabled) {
 function Update-WidgetMusicPlacement($Frame,[double]$Dpi,[double]$X,[double]$Y,[bool]$Visible) {
   if(!(Test-WidgetMusicActive)){return}
   try{
-    $blocked=[bool]($script:settingsSizePreview -or ($script:characterGallery -and $script:characterGallery.IsVisible) -or ($script:quoteEditor -and $script:quoteEditor.IsVisible))
+    $blocked=[bool]($script:settingsSizePreview -or ($script:characterGallery -and $script:characterGallery.IsVisible) -or ($script:quoteEditor -and $script:quoteEditor.IsVisible) -or ($script:taskPetEditor -and $script:taskPetEditor.IsVisible))
     $script:widgetMusic.Configure($script:widgetHandle,$script:hostHandle,$script:followHost,$Visible,$blocked,$script:desktopTopmost,$X,$Y,$Frame.Left,$Frame.Bottom,$Dpi)
   }catch{
     # A music placement failure must not truncate the rest of Tick-Widget.

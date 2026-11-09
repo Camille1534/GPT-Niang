@@ -1070,10 +1070,10 @@ function Tick-Widget {
     [GptWidgetNative]::SetWindowPos($script:widgetHandle,[IntPtr](-2),0,0,0,0,0x13)|Out-Null
     $script:window.Hide()
   }
-  $recoverAllowed=$script:followHost -and $visible -and !$script:drag -and !$script:context.IsOpen -and !$script:settingsSizePreview -and !($script:characterGallery -and $script:characterGallery.IsVisible) -and !($script:quoteEditor -and $script:quoteEditor.IsVisible)
+  $recoverAllowed=$script:followHost -and $visible -and !$script:drag -and !$script:context.IsOpen -and !$script:settingsSizePreview -and !($script:characterGallery -and $script:characterGallery.IsVisible) -and !($script:quoteEditor -and $script:quoteEditor.IsVisible) -and !($script:taskPetEditor -and $script:taskPetEditor.IsVisible)
   if($script:occlusionRecovery){$script:occlusionRecovery.Configure($script:hostHandle,[bool]$recoverAllowed)}
   if($now-$script:lastPresence-ge 1000){
-    Update-WidgetMusicVisibility ([bool]$visible) ([bool]($script:completionTemporary -or $script:settingsSizePreview -or ($script:characterGallery -and $script:characterGallery.IsVisible) -or ($script:quoteEditor -and $script:quoteEditor.IsVisible)))
+    Update-WidgetMusicVisibility ([bool]$visible) ([bool]($script:completionTemporary -or $script:settingsSizePreview -or ($script:characterGallery -and $script:characterGallery.IsVisible) -or ($script:quoteEditor -and $script:quoteEditor.IsVisible) -or ($script:taskPetEditor -and $script:taskPetEditor.IsVisible)))
     Write-WidgetPresence ([bool]$visible) $now
     Update-Quota;$script:lastPresence=$now
     Read-DisplayRequest

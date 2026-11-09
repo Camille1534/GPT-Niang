@@ -29,8 +29,9 @@ function Receive-TaskPetState($Event) {
   if(!$script:taskPetEnabled -or !$script:taskPetQuotes.ContainsKey([string]$Event.state)){return}
   $at=0.0;if(![double]::TryParse([string]$Event.at,[ref]$at)){return}
   $now=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-  if($at-lt $script:taskPetAt -or $now-$at-gt 30000 -or $at-gt $now+5000){return}
-  $script:taskPetAt=$at;$script:taskPetState=[string]$Event.state;$script:taskPetPending=$true
+  if([double]::IsNaN($at) -or [double]::IsInfinity($at) -or $at-lt $script:taskPetAt -or $now-$at-gt 30000 -or $at-gt $now+5000){return}
+  if($script:taskPetState-ne [string]$Event.state){$script:taskPetPending=$true}
+  $script:taskPetAt=$at;$script:taskPetState=[string]$Event.state
 }
 function Set-TaskPetEnabled([bool]$Enabled) {
   $script:taskPetEnabled=$Enabled;$script:taskPetPending=$false
@@ -40,13 +41,13 @@ function Set-TaskPetEnabled([bool]$Enabled) {
 }
 function Tick-TaskPet([long]$Now,[bool]$Visible) {
   if(!$script:taskPetEnabled){return}
-  if($Now-$script:taskPetShownAt-ge 60000){$script:taskPetPending=$true}
+  if($Now-$script:taskPetShownAt-ge 60000 -and $script:taskPetState-in @('thinking','working','searching','coding','waiting')){$script:taskPetPending=$true}
   if($script:taskPetState-ne 'idle' -and $Now-$script:taskPetAt-gt 120000){$script:taskPetState='idle';$script:taskPetPending=$true}
   if(!$Visible -or !$script:window.IsVisible -or [bool]$script:drag -or $script:context.IsOpen -or $script:settingsSizePreview -or (Test-WidgetUpdateEditor) -or !$script:collapsed -or $script:completionPending){return}
   if(!$script:taskPetPending -or $Now-$script:taskPetShownAt-lt 15000){return}
   $script:taskPetPending=$false;$script:taskPetShownAt=$Now
   Open-WidgetBubble 'quote'
-  $script:ui.QuoteText.Text=Get-TaskPetQuote $script:taskPetState;Fit-QuoteText
+  $script:ui.QuoteText.Text=Get-TaskPetQuote $script:taskPetState;Fit-QuoteText;Apply-Scene
   # A short native WPF motion leaves drag, scaling and music transforms intact.
   if(!$script:widgetMusic -or !$script:widgetMusic.Enabled){
     $motion=[Windows.Media.TranslateTransform]::new();$script:ui.Girl.RenderTransform=$motion
@@ -59,6 +60,18 @@ function Tick-TaskPet([long]$Now,[bool]$Visible) {
 }
 function Get-TaskPetStatus {
   return @{enabled=[bool]$script:taskPetEnabled;state=$script:taskPetState;updatedAt=$script:taskPetAt;shownAt=$script:taskPetShownAt;pending=[bool]$script:taskPetPending}
+}
+function Save-TaskPetQuoteLines([string]$State,[string]$Text) {
+  if(!$script:taskPetQuotes.ContainsKey($State)){throw '请选择有效状态。'}
+  $lineNumber=0
+  $rows=@(foreach($line in ($Text-split '\r?\n')){
+    $lineNumber++;if(!$line.Trim()){continue}
+    $row=@{text=$line;weight=1}
+    if($line-match '^\s*(\d+(?:\.\d+)?)\s*\|\s*(.+)$'){$row=@{text=$Matches[2];weight=[double]::Parse($Matches[1],[Globalization.CultureInfo]::InvariantCulture)}}
+    if(@(ConvertTo-WidgetQuoteRows $row).Count-ne 1){throw "第 $lineNumber 行无效：每条最多 200 字，权重须大于 0 且不超过 1000。"}
+    $row
+  })
+  $null=Save-WidgetQuotes (Join-Path $script:dataDir ('task-quotes\'+$State)) $rows
 }
 function Open-TaskPetQuoteEditor {
   if($script:taskPetEditor -and $script:taskPetEditor.IsVisible){$null=$script:taskPetEditor.Activate();return}
@@ -73,25 +86,33 @@ function Open-TaskPetQuoteEditor {
 </Window>
 '@)
   $script:taskPetEditor=$editor
+  $script:taskPetEditorState=$null;$script:taskPetDrafts=@{};$script:taskPetSavedLines=@{}
   $names=[ordered]@{idle='待机';thinking='思考';working='执行工具';searching='搜索';coding='写代码';waiting='等待你回应';completed='已完成';error='发生错误';interrupted='已中断'}
   foreach($key in $names.Keys){$item=[Windows.Controls.ComboBoxItem]::new();$item.Tag=$key;$item.Content=$names[$key];$null=$editor.FindName('State').Items.Add($item)}
   $editor.FindName('State').Add_SelectionChanged({
     $e=$script:taskPetEditor;$state=[string]$e.FindName('State').SelectedItem.Tag
-    $e.FindName('Lines').Text=((Get-TaskPetQuotes $state)|ForEach-Object{([string]$_.weight)+' | '+$_.text})-join "`r`n"
-    $e.FindName('Feedback').Text='切换状态前请先保存。文件仅保存在本机。'
+    if($script:taskPetEditorState){$script:taskPetDrafts[$script:taskPetEditorState]=$e.FindName('Lines').Text}
+    if(!$script:taskPetDrafts.ContainsKey($state)){
+      $text=((Get-TaskPetQuotes $state)|ForEach-Object{([string]$_.weight)+' | '+$_.text})-join "`r`n"
+      $script:taskPetDrafts[$state]=$text;$script:taskPetSavedLines[$state]=$text
+    }
+    $script:taskPetEditorState=$state;$e.FindName('Lines').Text=$script:taskPetDrafts[$state]
+    $e.FindName('Feedback').Text='切换状态会保留草稿；点击保存后生效。文件仅保存在本机。'
   })
   $editor.FindName('Save').Add_Click({try{
     $e=$script:taskPetEditor;$state=[string]$e.FindName('State').SelectedItem.Tag
-    $rows=@(foreach($line in ($e.FindName('Lines').Text-split '\r?\n')){
-      if(!$line.Trim()){continue}
-      if($line-match '^\s*(\d+(?:\.\d+)?)\s*\|\s*(.+)$'){@{text=$Matches[2];weight=[double]::Parse($Matches[1],[Globalization.CultureInfo]::InvariantCulture)}}else{@{text=$line;weight=1}}
-    })
-    $null=Save-WidgetQuotes (Join-Path $script:dataDir ('task-quotes\'+$state)) $rows
+    Save-TaskPetQuoteLines $state $e.FindName('Lines').Text
+    $script:taskPetSavedLines[$state]=$e.FindName('Lines').Text
     $e.FindName('Feedback').Text='已保存，下次显示此状态时生效。'
   }catch{$script:taskPetEditor.FindName('Feedback').Text=$_.Exception.Message}})
   $editor.FindName('Reset').Add_Click({
     $e=$script:taskPetEditor;$state=[string]$e.FindName('State').SelectedItem.Tag
-    try{$null=Reset-WidgetQuotes (Join-Path $script:dataDir ('task-quotes\'+$state));$e.FindName('Lines').Text=$script:taskPetQuotes[$state]-join "`r`n";$e.FindName('Feedback').Text='已恢复；旧台词已备份。'}catch{$e.FindName('Feedback').Text=$_.Exception.Message}
+    try{$null=Reset-WidgetQuotes (Join-Path $script:dataDir ('task-quotes\'+$state));$e.FindName('Lines').Text=$script:taskPetQuotes[$state]-join "`r`n";$script:taskPetSavedLines[$state]=$e.FindName('Lines').Text;$e.FindName('Feedback').Text='已恢复；旧台词已备份。'}catch{$e.FindName('Feedback').Text=$_.Exception.Message}
+  })
+  $editor.Add_Closing({param($sender,$event)
+    $script:taskPetDrafts[$script:taskPetEditorState]=$sender.FindName('Lines').Text
+    $dirty=@($script:taskPetDrafts.Keys|Where-Object{$script:taskPetDrafts[$_]-cne $script:taskPetSavedLines[$_]})
+    if($dirty.Count -and [Windows.MessageBox]::Show($sender,'仍有未保存的台词，确定放弃修改并关闭？','任务台词',[Windows.MessageBoxButton]::YesNo,[Windows.MessageBoxImage]::Question,[Windows.MessageBoxResult]::No)-ne [Windows.MessageBoxResult]::Yes){$event.Cancel=$true}
   })
   $editor.FindName('State').SelectedIndex=0;$null=$editor.ShowDialog()
 }

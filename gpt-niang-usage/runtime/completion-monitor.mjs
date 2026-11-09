@@ -70,7 +70,7 @@ export class CompletionRolloutTail {
     const identity=fileIdentity(stat);
     if(identity!==this.identity || stat.size<this.offset){
       // Retain dedupe and the time boundary when a log rotates or is truncated.
-      this.identity=identity;this.offset=0;this.lineStartOffset=0;this.boundaryBytes=Buffer.alloc(0);this.boundaryProof=null;this.pending='';this.discardingLongLine=false;this.decoder=new StringDecoder('utf8');
+      this.identity=identity;this.offset=0;this.lineStartOffset=0;this.boundaryBytes=Buffer.alloc(0);this.boundaryProof=null;this.pending='';this.discardingLongLine=false;this.decoder=new StringDecoder('utf8');this.taskContext={};
     }
     const remaining=Math.min(stat.size-this.offset,MAX_READ_BYTES);
     if(remaining<=0)return [];
@@ -89,7 +89,7 @@ export class CompletionRolloutTail {
       if(this.discardingLongLine){this.discardingLongLine=false;continue;}
       const line=raw.endsWith('\r')?raw.slice(0,-1):raw;
       if(line.length>MAX_LINE_CHARACTERS || (!this.onActivity && !line.includes('"event_msg"')))continue;
-      try{const record=JSON.parse(line);if(this.onActivity){const activity=parseTaskRecord(record,{sessionId:this.sessionId,since:this.since,context:this.taskContext});if(activity)this.onActivity(activity);}
+      try{const record=JSON.parse(line);if(this.onActivity){const activity=parseTaskRecord(record,{sessionId:this.sessionId,since:this.since,context:this.taskContext});if(activity){try{this.onActivity(activity);}catch{}}}
       const event=parseCompletionRecord(record,{sessionId:this.sessionId,seenTurns:this.seenTurns,since:this.since});if(event)notifications.push(event);}catch{}
     }
     if(this.pending.length>MAX_LINE_CHARACTERS){this.pending='';this.discardingLongLine=true;}
@@ -207,6 +207,7 @@ export class CompletionMonitor {
           // A transient access failure is not evidence that the file changed.
           if(sameContent===null)continue;
           if(sameContent.matches){
+            if(checkpoint.taskContext)tail.taskContext={...checkpoint.taskContext};
             tail.offset=checkpoint.resumeOffset;tail.lineStartOffset=checkpoint.resumeOffset;
             tail.discardingLongLine=checkpoint.discardingLongLine;tail.since=checkpoint.since;
             tail.boundaryBytes=sameContent.boundary;
@@ -256,7 +257,8 @@ export class CompletionMonitor {
       {length:proofBytes.length,sha256:createHash('sha256').update(proofBytes).digest('hex')}:tail.boundaryProof;
     const resumeOffset=tail.discardingLongLine?tail.offset-incomplete:tail.lineStartOffset;
     const checkpoint={identity:tail.identity,offset:tail.offset,resumeOffset,proof,discardingLongLine:tail.discardingLongLine,
-      hadUnread:tail.offset<tail.lastKnownSize,partial:Boolean(tail.pending || incomplete || tail.discardingLongLine),since:tail.since,lastSeenAt:tail.lastSeenAt};
+      hadUnread:tail.offset<tail.lastKnownSize,partial:Boolean(tail.pending || incomplete || tail.discardingLongLine),since:tail.since,lastSeenAt:tail.lastSeenAt,
+      taskContext:this.onActivity?{...tail.taskContext}:undefined};
     this.checkpoints.delete(id);this.checkpoints.set(id,checkpoint);
     if(this.checkpoints.size>MAX_CHECKPOINTS)this.checkpoints.delete(this.checkpoints.keys().next().value);
   }
@@ -264,7 +266,7 @@ export class CompletionMonitor {
 }
 
 function run(){
-  const stateFile=process.argv[2]||null;
+  const stateFile=process.argv.slice(2).find(value=>value!=='--task-states')||null;
   const monitor=new CompletionMonitor({onNotification:event=>process.stdout.write(JSON.stringify(event)+'\n'),onActivity:process.argv.includes('--task-states')?event=>process.stdout.write(JSON.stringify(event)+'\n'):null,stateFile});
   monitor.start();process.stdin.resume();
   process.stdin.on('end',()=>{monitor.stop();process.exit(0);});

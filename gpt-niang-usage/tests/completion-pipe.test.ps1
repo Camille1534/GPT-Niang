@@ -56,6 +56,19 @@ try{
   Assert (!$script:completionProcess -and $script:completionLastError) 'Start failure is contained with a retry deadline'
   $retry=$script:completionRetryAfter;Start-CompletionMonitor
   Assert ($script:completionRetryAfter-eq $retry) 'Failure retries do not spin on every tick'
+  $script:config.nodePath=$node;$script:taskPetEnabled=$true;$script:completionRetryAfter=0
+  $script:taskEvents=0
+  function Receive-TaskPetState($Event){$script:taskEvents++}
+  Start-CompletionMonitor
+  Start-Sleep -Milliseconds 1200;Read-CompletionMonitorOutput
+  $sharedPid=$script:completionProcess.Id
+  Set-CompletionNotificationEnabled $false
+  Assert ($script:completionProcess.Id-eq $sharedPid) 'Disabling reminders retains the task-reaction monitor'
+  $record=@{type='event_msg';timestamp=[DateTime]::UtcNow.ToString('o');payload=@{type='task_started';turn_id='shared-task'}}
+  [IO.File]::AppendAllText($file,(($record|ConvertTo-Json -Compress -Depth 4)+"`n"),[Text.UTF8Encoding]::new($false))
+  $deadline=[DateTime]::UtcNow.AddSeconds(8)
+  do{Read-CompletionMonitorOutput;if($script:taskEvents-gt 0){break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow-lt $deadline)
+  Assert ($script:taskEvents-gt 0) 'The shared pipe keeps delivering task states after reminders are disabled'
   Write-Output 'PASS: real child pipe, disabled baseline, one process, EOF cleanup, re-enable, crash recovery, bounded burst and contained startup failure'
 }finally{
   Stop-CompletionMonitor;Clear-CompletionNotifications
