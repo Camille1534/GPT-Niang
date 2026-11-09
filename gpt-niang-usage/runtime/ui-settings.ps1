@@ -140,6 +140,11 @@ function Initialize-WidgetSettingsMenu {
   Add-SettingsPanel $bubbleSize.Panel
   $script:settingsMenuUi.Hide=Add-SettingsAction '隐藏设置按钮' {param($sender,$event)$script:hideMenu=$sender.IsChecked;Set-MenuVisible $false;Save-Settings} -Description '仍可右键点角色打开设置' -Checkable -ReturnItem
   $script:settingsMenuUi.HeadPatCursor=Add-SettingsAction '摸头手势指针' {param($sender,$event)Set-WidgetHeadPatCursor ([bool]$sender.IsChecked)} -Description '鼠标移到角色身上时，换成摸头的小手' -Checkable -ReturnItem
+  $cursorSize=New-SettingsSlider '摸头指针大小' 0.8 2.0 0.1
+  $script:settingsMenuUi.CursorSize=$cursorSize.Slider;$script:settingsMenuUi.CursorSizeText=$cursorSize.Value
+  $cursorSize.Slider.Value=$script:headPatCursorScale
+  $cursorSize.Slider.Add_ValueChanged({param($sender,$event)if($script:settingsMenuSync){return};Set-WidgetHeadPatCursorScale $sender.Value;$script:settingsMenuUi.CursorSizeText.Text=([Math]::Round($script:headPatCursorScale*100)).ToString()+'%'})
+  Add-SettingsPanel $cursorSize.Panel
   } -ReturnItem
   $script:settingsMenuUi.Colors=Add-SettingsSubmenu '配色效果' {
   $script:settingsMenuUi.ColorMixed=Add-SettingsAction '台词与颜色独立随机' {Set-WidgetColorMode 'mixed';Save-Settings;Update-WidgetSettingsMenu} -Description '先抽台词，再抽变色；每句都能触发' -Checkable -ReturnItem
@@ -283,6 +288,7 @@ function Update-WidgetSettingsMenu{
     $script:settingsMenuUi.Topmost.Visibility=$desktopVisibility;$script:settingsMenuUi.TopmostDivider.Visibility=$desktopVisibility
     $script:settingsMenuUi.Tap.IsChecked=$script:bubbleTapAdvance;$script:settingsMenuUi.Sound.IsChecked=$script:soundOn;$script:settingsMenuUi.Hide.IsChecked=$script:hideMenu
     $script:settingsMenuUi.HeadPatCursor.IsChecked=$script:headPatCursorEnabled
+    $script:settingsMenuUi.CursorSize.Value=$script:headPatCursorScale;$script:settingsMenuUi.CursorSizeText.Text=([Math]::Round($script:headPatCursorScale*100)).ToString()+'%'
     $script:settingsMenuUi.ColorLinked.IsChecked=$script:colorMode-eq 'linked';$script:settingsMenuUi.ColorRainbow.IsChecked=$script:colorMode-eq 'rainbow';$script:settingsMenuUi.ColorOriginal.IsChecked=$script:colorMode-eq 'original'
     $script:settingsMenuUi.ColorSurprise.IsChecked=$script:colorMode-eq 'surprise';$script:settingsMenuUi.ColorRare.IsChecked=$script:colorMode-eq 'rare';$script:settingsMenuUi.ColorSpecial.IsChecked=$script:colorMode-eq 'special'
     $script:settingsMenuUi.ColorMixed.IsChecked=$script:colorMode-eq 'mixed'

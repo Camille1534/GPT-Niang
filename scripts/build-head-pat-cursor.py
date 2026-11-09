@@ -22,7 +22,7 @@ for cell, name in enumerate(('head-pat-cursor.cur', 'head-pat-pressed.cur')):
     offset = 6 + 16 * len(frames)
     directory = bytearray(struct.pack('<HHH', 0, 2, len(frames)))
     for size, data in frames:
-        directory += struct.pack('<BBBBHHII', size, size, 0, 0, round(6 * size / 32), round(21 * size / 32), len(data), offset)
+        directory += struct.pack('<BBBBHHII', size, size, 0, 0, round(6 * size / 32), round((15 if cell else 21) * size / 32), len(data), offset)
         offset += len(data)
     (assets / name).write_bytes(directory + b''.join(data for _, data in frames))
     print('Built', name)

@@ -46,6 +46,10 @@ try{
   function Open-WidgetCharacterGallery {$script:galleryOpenCount++}
   Initialize-WidgetSettingsMenu
   Assert-Equal $script:settingsMenuUi.HeadPatCursor.IsChecked $false 'Head-pat cursor is opt-in'
+  $script:settingsMenuUi.CursorSize.Value=1.5
+  Assert-Equal $script:headPatCursorScale 1.5 'Size slider applies immediately'
+  Assert-Equal $script:settingsMenuUi.CursorSizeText.Text '150%' 'Size slider shows percent'
+  $script:settingsMenuUi.CursorSize.Value=1.0
   $script:settingsMenuUi.HeadPatCursor.IsChecked=$true
   $script:settingsMenuUi.HeadPatCursor.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
   Assert-Equal $script:headPatCursorEnabled $true 'Appearance menu enables head-pat cursor'

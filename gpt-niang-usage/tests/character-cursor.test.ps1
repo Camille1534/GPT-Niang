@@ -47,6 +47,10 @@ try{
   $lost.RoutedEvent=[Windows.UIElement]::LostMouseCaptureEvent
   $script:ui.Girl.RaiseEvent($lost)
   Assert (!$script:headPatPressed -and $script:ui.Girl.Cursor-eq $script:headPatCursor) 'Lost capture resets press'
+  Set-WidgetHeadPatCursorScale 1.5
+  Assert ($script:headPatCursorPixels-eq [int][Math]::Round(48*[Windows.Media.VisualTreeHelper]::GetDpi($script:ui.Girl).DpiScaleX)) 'Scale changes native cursor size with display DPI'
+  Assert ((Get-Content -LiteralPath $settingsFile -Raw|ConvertFrom-Json).headPatCursorScale-eq 1.5) 'Cursor scale persists'
+  Set-WidgetHeadPatCursorScale 1.0
   $cached=$script:headPatCursor
   Set-WidgetHeadPatCursor $false
   Assert ($script:ui.Girl.Cursor-eq [Windows.Input.Cursors]::Hand) 'Disabling restores the system hand immediately'
@@ -67,11 +71,13 @@ try{
   $file=Join-Path $script:appDir 'assets\head-pat-cursor.cur'
   $bytes=[IO.File]::ReadAllBytes($file)
   Assert ([BitConverter]::ToUInt16($bytes,2)-eq 2 -and [BitConverter]::ToUInt16($bytes,4)-eq 4) 'Asset must be a multi-resolution Windows cursor'
+  $pressedBytes=[IO.File]::ReadAllBytes((Join-Path $script:appDir 'assets\head-pat-pressed.cur'))
   $i=0
   foreach($size in @(32,48,64,96)){
     $offset=6+16*$i
     Assert ($bytes[$offset]-eq $size -and $bytes[$offset+1]-eq $size) 'Cursor must include each DPI size'
     Assert ([BitConverter]::ToUInt16($bytes,$offset+4)-eq [Math]::Round(6*$size/32) -and [BitConverter]::ToUInt16($bytes,$offset+6)-eq [Math]::Round(21*$size/32)) 'Every size must keep the hotspot on the touching fingertip'
+    Assert ([BitConverter]::ToUInt16($pressedBytes,$offset+6)-eq [Math]::Round(15*$size/32)) 'Pressed artwork moves down visibly without moving the actual pointer'
     $i++
   }
   'PASS: native WPF cursor load, local scope, menu-independent settings, saved opt-in, DPI hotspots, cache and safe fallback'
