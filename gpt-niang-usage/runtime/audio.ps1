@@ -187,7 +187,8 @@ function New-WidgetAudioState([string]$AppDir,[string]$DataDir,$Preferences) {
         Press=$null;Release=$null;PressPath=$null;ReleasePath=$null
         Volume=(Get-WidgetAudioVolume);Timer=$timer;Clock=[Diagnostics.Stopwatch]::new()
         Queue=[GptClickAudioQueue]::new()
-        Duration=0.0;Pressing=$false;PressEnded=$true;PendingRelease=$false;ReleasePlayed=$true}
+        Duration=0.0;ReleaseDuration=0.0;PlaybackClock=[Diagnostics.Stopwatch]::new();PlaybackSeconds=0.0
+        Pressing=$false;PressEnded=$true;PendingRelease=$false;ReleasePlayed=$true}
     try{
         foreach($slot in @('press','release')){
             $source=if($Preferences.mode-eq 'builtin'){Join-Path $AppDir ('assets/'+$slot+'.wav')}else{Get-WidgetCustomAudioPath $audio $slot}
@@ -198,6 +199,7 @@ function New-WidgetAudioState([string]$AppDir,[string]$DataDir,$Preferences) {
                 $loaded=New-WidgetAudioClip $source $audio.Volume
                 $audio[$slot]=$loaded
                 if($slot-eq 'press'){$audio.Duration=$duration}
+                else{$audio.ReleaseDuration=$duration}
             }catch{
                 if($Preferences.mode-eq 'builtin'){throw}
                 $audio.Errors[$slot]='文件不可用，请重新选择。'
@@ -241,12 +243,13 @@ function Invoke-WidgetReleaseNow {
     if(!(Get-WidgetAudioEnabled) -or (Get-WidgetAudioVolume)-le 0 -or !$audio.Release){return}
     Set-WidgetAudioVolume
     # Native stop/play and recovery stay on the audio worker, away from dragging.
-    if($audio.Queue){try{$audio.Queue.Play($audio.Release)}catch{}}
+    if($audio.Queue){try{$audio.Queue.Play($audio.Release);$audio.PlaybackSeconds=$audio.ReleaseDuration+0.06;$audio.PlaybackClock.Restart()}catch{}}
 }
 function Stop-WidgetAudio {
     $audio=$script:gptNiangAudio
     if(!$audio){return}
     $audio.Timer.Stop();$audio.PendingRelease=$false;$audio.ReleasePlayed=$true;$audio.Pressing=$false;$audio.PressEnded=$true;$audio.Clock.Reset()
+    $audio.PlaybackClock.Reset();$audio.PlaybackSeconds=0.0
     if($audio.Queue){try{$audio.Queue.Stop()}catch{}}
 }
 function Initialize-WidgetAudio {
@@ -265,12 +268,17 @@ function Close-WidgetAudio {
 function Play-WidgetPressSound {
     $audio=$script:gptNiangAudio
     if(!$audio){return}
+    # Coalesce rapid clicks: finish the current pair without restarting or queuing it.
+    # This gate applies only to sound; character clicks and dragging still run normally.
+    if((Get-WidgetAudioEnabled) -and (Get-WidgetAudioVolume)-gt 0 -and
+       ($audio.Pressing -or $audio.PendingRelease -or
+        ($audio.PlaybackClock.IsRunning -and $audio.PlaybackClock.Elapsed.TotalSeconds-lt $audio.PlaybackSeconds))){return}
     $audio.Timer.Stop();$audio.PendingRelease=$false;$audio.PressEnded=$true;$audio.Clock.Reset()
     if(!(Get-WidgetAudioEnabled) -or (Get-WidgetAudioVolume)-le 0 -or (!$audio.Press -and !$audio.Release)){$audio.Pressing=$false;return}
     $audio.Pressing=$true;$audio.PressEnded=(!$audio.Press);$audio.ReleasePlayed=$false;$audio.Clock.Restart()
     Set-WidgetAudioVolume
     # Keep the original stop-then-play sequence without waiting on the UI thread.
-    if($audio.Press -and $audio.Queue){try{$audio.Queue.Play($audio.Press)}catch{$audio.PressEnded=$true}}
+    if($audio.Press -and $audio.Queue){try{$audio.Queue.Play($audio.Press);$audio.PlaybackSeconds=$audio.Duration+0.06;$audio.PlaybackClock.Restart()}catch{$audio.PressEnded=$true}}
 }
 function Play-WidgetReleaseSound {
     $audio=$script:gptNiangAudio
