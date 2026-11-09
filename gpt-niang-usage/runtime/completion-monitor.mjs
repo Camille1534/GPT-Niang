@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {parseTaskRecord} from './task-state.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
@@ -44,12 +45,24 @@ export function parseCompletionRecord(record,{sessionId='',seenTurns=null,since=
 function fileIdentity(stat){return `${stat.dev}:${stat.ino}`;}
 
 export class CompletionRolloutTail {
-  constructor(file,{sessionId=path.basename(file),baseline=false,since=0}={}) {
-    this.file=file;this.sessionId=sessionId;this.since=since;this.offset=0;
+  constructor(file,{sessionId=path.basename(file),baseline=false,since=0,onActivity=null}={}) {
+    this.onActivity=onActivity;this.taskContext={};this.file=file;this.sessionId=sessionId;this.since=since;this.offset=0;
     this.pending='';this.discardingLongLine=false;this.decoder=new StringDecoder('utf8');this.seenTurns=new Set();
     const stat=fs.statSync(file);this.identity=fileIdentity(stat);
     if(baseline)this.offset=stat.size;
     this.lineStartOffset=this.offset;this.lastKnownSize=stat.size;this.boundaryBytes=Buffer.alloc(0);this.boundaryProof=null;
+    if(baseline && onActivity){
+      // Seed the running turn from a bounded suffix, without replaying old speech.
+      let fd;
+      try{
+        fd=fs.openSync(file,'r');const start=Math.max(0,stat.size-MAX_LINE_CHARACTERS),buffer=Buffer.alloc(stat.size-start);
+        const count=fs.readSync(fd,buffer,0,buffer.length,start);
+        const lines=buffer.subarray(0,count).toString('utf8').split('\n');if(start)lines.shift();lines.pop();
+        let latest;
+        for(const line of lines){try{const event=parseTaskRecord(JSON.parse(line),{sessionId,context:this.taskContext});if(event)latest=event;}catch{}}
+        if(latest && this.taskContext.active && Date.now()-latest.at<30000)onActivity(latest);
+      }catch{}finally{if(fd!==undefined)fs.closeSync(fd);}
+    }
   }
   update() {
     let stat;try{stat=fs.statSync(this.file);}catch{return [];}
@@ -57,7 +70,7 @@ export class CompletionRolloutTail {
     const identity=fileIdentity(stat);
     if(identity!==this.identity || stat.size<this.offset){
       // Retain dedupe and the time boundary when a log rotates or is truncated.
-      this.identity=identity;this.offset=0;this.lineStartOffset=0;this.boundaryBytes=Buffer.alloc(0);this.boundaryProof=null;this.pending='';this.discardingLongLine=false;this.decoder=new StringDecoder('utf8');
+      this.identity=identity;this.offset=0;this.lineStartOffset=0;this.boundaryBytes=Buffer.alloc(0);this.boundaryProof=null;this.pending='';this.discardingLongLine=false;this.decoder=new StringDecoder('utf8');this.taskContext={};
     }
     const remaining=Math.min(stat.size-this.offset,MAX_READ_BYTES);
     if(remaining<=0)return [];
@@ -75,8 +88,9 @@ export class CompletionRolloutTail {
     for(const raw of lines){
       if(this.discardingLongLine){this.discardingLongLine=false;continue;}
       const line=raw.endsWith('\r')?raw.slice(0,-1):raw;
-      if(line.length>MAX_LINE_CHARACTERS || !line.includes('"event_msg"'))continue;
-      try{const event=parseCompletionRecord(JSON.parse(line),{sessionId:this.sessionId,seenTurns:this.seenTurns,since:this.since});if(event)notifications.push(event);}catch{}
+      if(line.length>MAX_LINE_CHARACTERS || (!this.onActivity && !line.includes('"event_msg"')))continue;
+      try{const record=JSON.parse(line);if(this.onActivity){const activity=parseTaskRecord(record,{sessionId:this.sessionId,since:this.since,context:this.taskContext});if(activity){try{this.onActivity(activity);}catch{}}}
+      const event=parseCompletionRecord(record,{sessionId:this.sessionId,seenTurns:this.seenTurns,since:this.since});if(event)notifications.push(event);}catch{}
     }
     if(this.pending.length>MAX_LINE_CHARACTERS){this.pending='';this.discardingLongLine=true;}
     return notifications;
@@ -146,8 +160,8 @@ function checkpointMatches(file,tail,checkpoint){
 }
 
 export class CompletionMonitor {
-  constructor({codexHome=defaultCodexHome(),intervalMs=1000,onNotification=()=>{},since=Date.now(),stateFile=null}={}){
-    this.codexHome=codexHome;this.intervalMs=intervalMs;this.onNotification=onNotification;this.since=since;
+  constructor({codexHome=defaultCodexHome(),intervalMs=1000,onNotification=()=>{},onActivity=null,since=Date.now(),stateFile=null}={}){
+    this.onActivity=onActivity;this.codexHome=codexHome;this.intervalMs=intervalMs;this.onNotification=onNotification;this.since=since;
     this.stateFile=stateFile;this.resume=false;this.lastStateSave=0;this.lastEnded=0;
     this.tails=new Map();this.subagentSessions=new Map();this.seenTurns=new Set();this.checkpoints=new Map();this.timer=null;
   }
@@ -185,7 +199,7 @@ export class CompletionMonitor {
         // from their start and filtered by `since` instead of being skipped.
         let fileBaseline=baseline;
         if(fileBaseline && this.resume){try{if(fs.statSync(file).mtimeMs>=this.since)fileBaseline=false;}catch{}}
-        try{tail=new CompletionRolloutTail(file,{sessionId,baseline:fileBaseline,since:this.since});}catch{continue;}
+        try{tail=new CompletionRolloutTail(file,{sessionId,baseline:fileBaseline,since:this.since,onActivity:this.onActivity});}catch{continue;}
         if(fileBaseline && header.baselineBoundary?.offset===tail.offset){tail.boundaryBytes=header.baselineBoundary.bytes;tail.boundaryProof=header.baselineBoundary.proof;}
         const checkpoint=this.checkpoints.get(sessionId);
         if(checkpoint){
@@ -193,6 +207,7 @@ export class CompletionMonitor {
           // A transient access failure is not evidence that the file changed.
           if(sameContent===null)continue;
           if(sameContent.matches){
+            if(checkpoint.taskContext)tail.taskContext={...checkpoint.taskContext};
             tail.offset=checkpoint.resumeOffset;tail.lineStartOffset=checkpoint.resumeOffset;
             tail.discardingLongLine=checkpoint.discardingLongLine;tail.since=checkpoint.since;
             tail.boundaryBytes=sameContent.boundary;
@@ -242,7 +257,8 @@ export class CompletionMonitor {
       {length:proofBytes.length,sha256:createHash('sha256').update(proofBytes).digest('hex')}:tail.boundaryProof;
     const resumeOffset=tail.discardingLongLine?tail.offset-incomplete:tail.lineStartOffset;
     const checkpoint={identity:tail.identity,offset:tail.offset,resumeOffset,proof,discardingLongLine:tail.discardingLongLine,
-      hadUnread:tail.offset<tail.lastKnownSize,partial:Boolean(tail.pending || incomplete || tail.discardingLongLine),since:tail.since,lastSeenAt:tail.lastSeenAt};
+      hadUnread:tail.offset<tail.lastKnownSize,partial:Boolean(tail.pending || incomplete || tail.discardingLongLine),since:tail.since,lastSeenAt:tail.lastSeenAt,
+      taskContext:this.onActivity?{...tail.taskContext}:undefined};
     this.checkpoints.delete(id);this.checkpoints.set(id,checkpoint);
     if(this.checkpoints.size>MAX_CHECKPOINTS)this.checkpoints.delete(this.checkpoints.keys().next().value);
   }
@@ -250,8 +266,8 @@ export class CompletionMonitor {
 }
 
 function run(){
-  const stateFile=process.argv[2]||null;
-  const monitor=new CompletionMonitor({onNotification:event=>process.stdout.write(JSON.stringify(event)+'\n'),stateFile});
+  const stateFile=process.argv.slice(2).find(value=>value!=='--task-states')||null;
+  const monitor=new CompletionMonitor({onNotification:event=>process.stdout.write(JSON.stringify(event)+'\n'),onActivity:process.argv.includes('--task-states')?event=>process.stdout.write(JSON.stringify(event)+'\n'):null,stateFile});
   monitor.start();process.stdin.resume();
   process.stdin.on('end',()=>{monitor.stop();process.exit(0);});
   process.on('SIGTERM',()=>{monitor.stop();process.exit(0);});
