@@ -1,9 +1,10 @@
 ﻿param([string]$TestRoot=$PSScriptRoot)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName PresentationFramework,PresentationCore,WindowsBase
-$appDir=Split-Path $TestRoot -Parent
+$script:appDir=Split-Path $TestRoot -Parent
 . ([ScriptBlock]::Create([IO.File]::ReadAllText((Join-Path $appDir 'runtime\ui-settings.ps1'),[Text.Encoding]::UTF8)))
 . (Join-Path $appDir 'runtime\quotes.ps1')
+. (Join-Path $appDir 'runtime\character-cursor.ps1')
 . (Join-Path $appDir 'runtime\audio.ps1')
 Initialize-WidgetAutoQuoteSettings $null
 . (Join-Path $appDir 'runtime\completion-notifications.ps1')
@@ -25,7 +26,7 @@ foreach($name in @('Set-AnimatedValue','Set-BubbleState')){
 }
 $poseWindow=[Windows.Markup.XamlReader]::Parse([IO.File]::ReadAllText((Join-Path $appDir 'widget.xaml'),[Text.Encoding]::UTF8))
 $script:ui=@{}
-foreach($name in @('Bubble','Tail','TailNear','SceneText')){$script:ui[$name]=$poseWindow.FindName($name)}
+foreach($name in @('Bubble','Tail','TailNear','SceneText','Girl')){$script:ui[$name]=$poseWindow.FindName($name)}
 function Set-WidgetAudioVolume {}
 function Stop-WidgetAudio {}
 . (Join-Path $appDir 'runtime\supervisor-task.ps1')
@@ -44,6 +45,14 @@ try{
   $script:galleryOpenCount=0
   function Open-WidgetCharacterGallery {$script:galleryOpenCount++}
   Initialize-WidgetSettingsMenu
+  Assert-Equal $script:settingsMenuUi.HeadPatCursor.IsChecked $false 'Head-pat cursor is opt-in'
+  $script:settingsMenuUi.HeadPatCursor.IsChecked=$true
+  $script:settingsMenuUi.HeadPatCursor.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
+  Assert-Equal $script:headPatCursorEnabled $true 'Appearance menu enables head-pat cursor'
+  Assert-Equal ($script:ui.Girl.Cursor-eq $script:headPatCursor -and $null-ne $script:headPatCursor) $true 'Menu applies the real custom cursor immediately'
+  $script:settingsMenuUi.HeadPatCursor.IsChecked=$false
+  $script:settingsMenuUi.HeadPatCursor.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
+  Assert-Equal $script:ui.Girl.Cursor ([Windows.Input.Cursors]::Hand) 'Menu restores standard hand cursor'
   Assert-Equal $script:settingsMenuUi.AudioBuiltin.IsCheckable $true 'Builtin audio is a radio choice'
   Assert-Equal $script:settingsMenuUi.AudioCustom.IsCheckable $true 'Custom audio is a radio choice'
   $audioHandler=${function:Invoke-WidgetAudioAction};$script:audioCommands=@()
@@ -106,7 +115,7 @@ try{
   Assert-Equal (Read-WidgetUpdateJson (Join-Path $script:dataDir 'update-preferences.json')).automatic $false 'Menu toggle persists separately'
   Assert-Equal $script:settingsMenuUi.Topmost.Visibility Collapsed 'Window mode hides topmost'
   Assert-Equal $script:settingsMenuUi.TopmostDivider.Visibility Collapsed 'Window mode hides its divider'
-  foreach($name in @('Follow','Desktop','Topmost','Hide','Sound','Tap')){
+  foreach($name in @('Follow','Desktop','Topmost','Hide','Sound','Tap','HeadPatCursor')){
     Assert-Equal $script:settingsMenuUi[$name].StaysOpenOnClick $true 'All settings retain menu interaction'
     Assert-Equal $script:settingsMenuUi[$name].Style $script:settingsMenuResources['SettingsItem'] 'Rows share the same style'
   }
@@ -199,6 +208,7 @@ try{
   Assert-Equal $script:settingsMenuUi.Volume.IsEnabled $false 'Muted sound disables volume control'
   Write-Output 'PASS: menu modes, conditional topmost, shared row styling, presets and sound controls'
 }finally{
+  Close-WidgetCharacterCursor
   $poseWindow.Close()
   $script:window.Close()
   Assert-WidgetUpdateChildPath $script:dataDir ([IO.Path]::GetTempPath())
