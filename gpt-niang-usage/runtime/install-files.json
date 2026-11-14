@@ -39,6 +39,7 @@
   "runtime/start-widget.ps1",
   "runtime/metadata.mjs",
   "runtime/mcp.mjs",
+  "runtime/codex-startup.mjs",
   "runtime/usage.mjs",
   "runtime/plan.mjs",
   "runtime/detect-plan.mjs",
